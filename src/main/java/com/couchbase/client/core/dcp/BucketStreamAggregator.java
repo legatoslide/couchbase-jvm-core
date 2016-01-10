@@ -35,12 +35,16 @@ import com.couchbase.client.core.message.dcp.GetFailoverLogRequest;
 import com.couchbase.client.core.message.dcp.GetFailoverLogResponse;
 import com.couchbase.client.core.message.dcp.OpenConnectionRequest;
 import com.couchbase.client.core.message.dcp.OpenConnectionResponse;
+import com.couchbase.client.core.message.dcp.StreamEndMessage;
 import com.couchbase.client.core.message.dcp.StreamRequestRequest;
 import com.couchbase.client.core.message.dcp.StreamRequestResponse;
 import com.couchbase.client.core.message.kv.GetAllMutationTokensRequest;
 import com.couchbase.client.core.message.kv.GetAllMutationTokensResponse;
 import com.couchbase.client.core.message.kv.MutationToken;
+
+import rx.Notification;
 import rx.Observable;
+import rx.functions.Action1;
 import rx.functions.Action2;
 import rx.functions.Func0;
 import rx.functions.Func1;
@@ -101,6 +105,12 @@ public class BucketStreamAggregator {
         return feed(state);
     }
 
+    static class DCPStreamsCounter {
+
+    	int maxCount;
+    	int currentCount = 0;
+	}
+
     /**
      * Opens a DCP stream and returns the feed of changes.
      *
@@ -108,51 +118,66 @@ public class BucketStreamAggregator {
      * @return the feed with {@link DCPRequest}s.
      */
     public Observable<DCPRequest> feed(final BucketStreamAggregatorState aggregatorState) {
-        return open()
-                .flatMap(new Func1<DCPConnection, Observable<DCPRequest>>() {
-                    @Override
-                    public Observable<DCPRequest> call(final DCPConnection response) {
-                        return Observable
-                                .from(aggregatorState)
-                                .flatMap(new Func1<BucketStreamState, Observable<StreamRequestResponse>>() {
-                                    @Override
-                                    public Observable<StreamRequestResponse> call(final BucketStreamState feed) {
-                                        Observable<StreamRequestResponse> res =
-                                                core.send(new StreamRequestRequest(feed.partition(), feed.vbucketUUID(),
-                                                        feed.startSequenceNumber(), feed.endSequenceNumber(),
-                                                        feed.snapshotStartSequenceNumber(), feed.snapshotEndSequenceNumber(),
-                                                        bucket));
-                                        return res.flatMap(new Func1<StreamRequestResponse, Observable<StreamRequestResponse>>() {
-                                            @Override
-                                            public Observable<StreamRequestResponse> call(StreamRequestResponse response) {
-                                                long rollbackSequenceNumber;
-                                                switch (response.status()) {
-                                                    case RANGE_ERROR:
-                                                        rollbackSequenceNumber = 0;
-                                                        break;
-                                                    case ROLLBACK:
-                                                        rollbackSequenceNumber = response.rollbackToSequenceNumber();
-                                                        break;
-                                                    default:
-                                                        return Observable.just(response);
-                                                }
-                                                return core.send(new StreamRequestRequest(feed.partition(), feed.vbucketUUID(),
-                                                        rollbackSequenceNumber, feed.endSequenceNumber(),
-                                                        rollbackSequenceNumber, feed.snapshotEndSequenceNumber(),
-                                                        bucket));
-                                            }
-                                        });
-                                    }
-                                })
-                                .toList()
-                                .flatMap(new Func1<List<StreamRequestResponse>, Observable<DCPRequest>>() {
-                                    @Override
-                                    public Observable<DCPRequest> call(List<StreamRequestResponse> streamRequestResponses) {
-                                        return connection.get().subject();
-                                    }
-                                });
-                    }
-                });
+    	
+    	final DCPStreamsCounter counters = new DCPStreamsCounter();
+    	counters.maxCount = aggregatorState.size();
+
+    	final Observable<DCPRequest> ret = connection.get().subject().doOnEach(new Action1<Notification<? super DCPRequest>>() {
+
+			@Override
+			public void call(Notification<? super DCPRequest> notification) {
+				if (notification.getValue() instanceof StreamEndMessage) {
+					counters.currentCount++;
+				}
+				if (counters.currentCount>=counters.maxCount) {
+					connection.get().subject().onCompleted();
+// System.out.println("STOP !!!");
+				}
+			}
+    	});
+
+        open()
+    		.flatMap(new Func1<DCPConnection, Observable<BucketStreamState>>() {
+				@Override
+				public Observable<BucketStreamState> call(DCPConnection unusedConnection) {
+					return Observable.from(aggregatorState);
+				}
+    		})
+    		
+            .flatMap(new Func1<BucketStreamState, Observable<StreamRequestResponse>>() {
+                @Override
+                public Observable<StreamRequestResponse> call(final BucketStreamState feed) {
+                    Observable<StreamRequestResponse> res =
+                            core.send(new StreamRequestRequest(feed.partition(), feed.vbucketUUID(),
+                                    feed.startSequenceNumber(), feed.endSequenceNumber(),
+                                    feed.snapshotStartSequenceNumber(), feed.snapshotEndSequenceNumber(),
+                                    bucket));
+                    return res.flatMap(new Func1<StreamRequestResponse, Observable<StreamRequestResponse>>() {
+                        @Override
+                        public Observable<StreamRequestResponse> call(StreamRequestResponse response) {
+                            long rollbackSequenceNumber;
+                            switch (response.status()) {
+                                case RANGE_ERROR:
+                                    rollbackSequenceNumber = 0;
+                                    break;
+                                case ROLLBACK:
+                                    rollbackSequenceNumber = response.rollbackToSequenceNumber();
+                                    break;
+                                default:
+                                    return Observable.just(response);
+                            }
+                            return core.send(new StreamRequestRequest(feed.partition(), feed.vbucketUUID(),
+                                    rollbackSequenceNumber, feed.endSequenceNumber(),
+                                    rollbackSequenceNumber, feed.snapshotEndSequenceNumber(),
+                                    bucket));
+                        }
+                    });
+                }
+            })
+            
+            .subscribe();
+        
+        return ret;
     }
 
     /**

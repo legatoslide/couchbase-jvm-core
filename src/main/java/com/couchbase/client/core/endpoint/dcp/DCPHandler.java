@@ -280,9 +280,6 @@ public class DCPHandler extends AbstractGenericHandler<FullBinaryMemcacheRespons
         if (request != null) {
             connection.subject().onNext(request);
         }
-        if (connection.streamsCount() == 0) {
-            connection.subject().onCompleted();
-        }
     }
 
     @Override
