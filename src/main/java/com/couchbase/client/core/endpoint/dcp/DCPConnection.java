@@ -46,6 +46,7 @@ public class DCPConnection {
     private final String bucket;
     private volatile int totalReceivedBytes;
     private List<Integer> streams = Collections.synchronizedList(new ArrayList<Integer>());
+    private static final List<DCPConnection> instances = new ArrayList<DCPConnection>();
 
     public DCPConnection(final CoreEnvironment env, final String name, final String bucket) {
         this.name = name;
@@ -53,8 +54,13 @@ public class DCPConnection {
         this.bucket = bucket;
         subject = UnicastAutoReleaseSubject.<DCPRequest>create(env.autoreleaseAfter(), TimeUnit.MILLISECONDS, env.scheduler())
                 .toSerialized();
+        instances.add(this);
     }
 
+    public static List<DCPConnection> instances() {
+    	return Collections.unmodifiableList(instances);
+    }
+    
     public int addStream(final String connectionName) {
         int streamId = nextStreamId++;
         streams.add(streamId);

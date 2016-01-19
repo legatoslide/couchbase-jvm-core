@@ -105,10 +105,14 @@ public class BucketStreamAggregator {
         return feed(state);
     }
 
-    static class DCPStreamsCounter {
+    static private class DCPStreamsCounter {
 
-    	int maxCount;
+    	final int maxCount;
     	int currentCount = 0;
+    	
+    	DCPStreamsCounter(int maxCount) {
+    		this.maxCount = maxCount;
+    	}
 	}
 
     /**
@@ -119,18 +123,25 @@ public class BucketStreamAggregator {
      */
     public Observable<DCPRequest> feed(final BucketStreamAggregatorState aggregatorState) {
     	
-    	final DCPStreamsCounter counters = new DCPStreamsCounter();
-    	counters.maxCount = aggregatorState.size();
+    	final DCPStreamsCounter counters = new DCPStreamsCounter(aggregatorState.size());
 
-    	final Observable<DCPRequest> ret = connection.get().subject().doOnEach(new Action1<Notification<? super DCPRequest>>() {
+    	Observable<DCPRequest> s = DCPConnection.instances().get(0).subject();
+    	for (int i=1; i<DCPConnection.instances().size(); i++) {
+    		s = s.mergeWith(DCPConnection.instances().get(i).subject());
+    	}
+    	
+    	final Observable<DCPRequest> ret = s.doOnEach(new Action1<Notification<? super DCPRequest>>() {
 
 			@Override
 			public void call(Notification<? super DCPRequest> notification) {
 				if (notification.getValue() instanceof StreamEndMessage) {
 					counters.currentCount++;
+// System.out.println("EndOfStream count="+counters.currentCount);
 				}
 				if (counters.currentCount>=counters.maxCount) {
-					connection.get().subject().onCompleted();
+					for (DCPConnection c : DCPConnection.instances()) {
+						c.subject().onCompleted();
+					}
 // System.out.println("STOP !!!");
 				}
 			}
