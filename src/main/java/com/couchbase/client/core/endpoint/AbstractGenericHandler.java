@@ -26,6 +26,7 @@ import com.couchbase.client.core.RequestCancelledException;
 import com.couchbase.client.core.ResponseEvent;
 import com.couchbase.client.core.ResponseHandler;
 import com.couchbase.client.core.env.CoreEnvironment;
+import com.couchbase.client.core.env.CoreScheduler;
 import com.couchbase.client.core.logging.CouchbaseLogger;
 import com.couchbase.client.core.logging.CouchbaseLoggerFactory;
 import com.couchbase.client.core.message.CouchbaseRequest;
@@ -34,11 +35,15 @@ import com.couchbase.client.core.message.ResponseStatus;
 import com.couchbase.client.core.metrics.NetworkLatencyMetricsIdentifier;
 import com.couchbase.client.core.service.ServiceType;
 import com.lmax.disruptor.EventSink;
+import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
 import io.netty.handler.codec.DecoderException;
 import io.netty.handler.codec.MessageToMessageCodec;
+import io.netty.handler.codec.base64.Base64;
+import io.netty.handler.codec.http.HttpHeaders;
+import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.timeout.IdleState;
 import io.netty.handler.timeout.IdleStateEvent;
 import io.netty.util.CharsetUtil;
@@ -52,7 +57,9 @@ import java.io.IOException;
 import java.net.SocketAddress;
 import java.nio.charset.Charset;
 import java.util.ArrayDeque;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Queue;
 
 /**
@@ -105,6 +112,11 @@ public abstract class AbstractGenericHandler<RESPONSE, ENCODED, REQUEST extends 
     private final boolean traceEnabled;
 
     /**
+     * A cache to avoid consistent string conversions for the request simple names.
+     */
+    private final Map<Class<? extends CouchbaseRequest>, String> classNameCache;
+
+    /**
      * The request which is expected to return next.
      */
     private REQUEST currentRequest;
@@ -152,6 +164,7 @@ public abstract class AbstractGenericHandler<RESPONSE, ENCODED, REQUEST extends 
         this.isTransient = isTransient;
         this.traceEnabled = LOGGER.isTraceEnabled();
         this.sentRequestTimings = new ArrayDeque<Long>();
+        this.classNameCache = new IdentityHashMap<Class<? extends CouchbaseRequest>, String>();
     }
 
     /**
@@ -198,39 +211,16 @@ public abstract class AbstractGenericHandler<RESPONSE, ENCODED, REQUEST extends 
     @Override
     protected void decode(ChannelHandlerContext ctx, RESPONSE msg, List<Object> out) throws Exception {
         if (currentDecodingState == DecodingState.INITIAL) {
-            currentRequest = sentRequestQueue.poll();
-            currentDecodingState = DecodingState.STARTED;
-            if (currentRequest != null) {
-                Long st = sentRequestTimings.poll();
-                if (st != null) {
-                    currentOpTime = System.nanoTime() - st;
-                } else {
-                    currentOpTime = -1;
-                }
-            }
-
-            if (traceEnabled) {
-                LOGGER.trace("{}Started decoding of {}", logIdent(ctx, endpoint), currentRequest);
-            }
+            initialDecodeTasks(ctx);
         }
 
         try {
             CouchbaseResponse response = decodeResponse(ctx, msg);
             if (response != null) {
                 publishResponse(response, currentRequest.observable());
-
                 if (currentDecodingState == DecodingState.FINISHED) {
-                    if (currentRequest != null && currentOpTime >= 0 && env() != null && env().networkLatencyMetricsCollector().isEnabled()) {
-                        NetworkLatencyMetricsIdentifier identifier = new NetworkLatencyMetricsIdentifier(
-                            remoteHostname,
-                            serviceType().toString(),
-                            currentRequest.getClass().getSimpleName(),
-                            response.status().toString()
-                        );
-                        env().networkLatencyMetricsCollector().record(identifier, currentOpTime);
-                    }
+                    writeMetrics(response);
                 }
-
             }
         } catch (CouchbaseException e) {
             currentRequest.observable().onError(e);
@@ -239,11 +229,69 @@ public abstract class AbstractGenericHandler<RESPONSE, ENCODED, REQUEST extends 
         }
 
         if (currentDecodingState == DecodingState.FINISHED) {
-            if (traceEnabled) {
-                LOGGER.trace("{}Finished decoding of {}", logIdent(ctx, endpoint), currentRequest);
+            resetStatesAfterDecode(ctx);
+        }
+    }
+
+    /**
+     * Helper method which creates the metrics for the current response and publishes them if enabled.
+     *
+     * @param response the response which is needed as context.
+     */
+    private void writeMetrics(final CouchbaseResponse response) {
+        if (currentRequest != null && currentOpTime >= 0 && env() != null
+            && env().networkLatencyMetricsCollector().isEnabled()) {
+
+            Class<? extends CouchbaseRequest> requestClass = currentRequest.getClass();
+            String simpleName = classNameCache.get(requestClass);
+            if (simpleName == null) {
+                simpleName = requestClass.getSimpleName();
+                classNameCache.put(requestClass, simpleName);
             }
-            currentRequest = null;
-            currentDecodingState = DecodingState.INITIAL;
+
+            NetworkLatencyMetricsIdentifier identifier = new NetworkLatencyMetricsIdentifier(
+                    remoteHostname,
+                    serviceType().toString(),
+                    simpleName,
+                    response.status().toString()
+            );
+            env().networkLatencyMetricsCollector().record(identifier, currentOpTime);
+        }
+    }
+
+    /**
+     * Helper method which performs the final tasks in the decoding process.
+     *
+     * @param ctx the channel handler context for logging purposes.
+     */
+    private void resetStatesAfterDecode(final ChannelHandlerContext ctx) {
+        if (traceEnabled) {
+            LOGGER.trace("{}Finished decoding of {}", logIdent(ctx, endpoint), currentRequest);
+        }
+        currentRequest = null;
+        currentDecodingState = DecodingState.INITIAL;
+    }
+
+    /**
+     * Helper method which performs the initial decoding process.
+     *
+     * @param ctx the channel handler context for logging purposes.
+     */
+    private void initialDecodeTasks(final ChannelHandlerContext ctx) {
+        currentRequest = sentRequestQueue.poll();
+        currentDecodingState = DecodingState.STARTED;
+
+        if (currentRequest != null) {
+            Long st = sentRequestTimings.poll();
+            if (st != null) {
+                currentOpTime = System.nanoTime() - st;
+            } else {
+                currentOpTime = -1;
+            }
+        }
+
+        if (traceEnabled) {
+            LOGGER.trace("{}Started decoding of {}", logIdent(ctx, endpoint), currentRequest);
         }
     }
 
@@ -256,24 +304,59 @@ public abstract class AbstractGenericHandler<RESPONSE, ENCODED, REQUEST extends 
     protected void publishResponse(final CouchbaseResponse response,
         final Subject<CouchbaseResponse, CouchbaseResponse> observable) {
         if (response.status() != ResponseStatus.RETRY && observable != null) {
-            final Scheduler.Worker worker = env().scheduler().createWorker();
-            worker.schedule(new Action0() {
-                @Override
-                public void call() {
-                    try {
-                        observable.onNext(response);
-                        observable.onCompleted();
-                    } catch(Exception ex) {
-                        LOGGER.warn("Caught exception while onNext on observable", ex);
-                        observable.onError(ex);
-                    } finally {
-                        worker.unsubscribe();
-                    }
-                }
-            });
+            Scheduler scheduler = env().scheduler();
+            if (scheduler instanceof CoreScheduler) {
+                scheduleDirect((CoreScheduler) scheduler, response, observable);
+            } else {
+                scheduleWorker(scheduler, response, observable);
+            }
         } else {
             responseBuffer.publishEvent(ResponseHandler.RESPONSE_TRANSLATOR, response, observable);
         }
+    }
+
+    /**
+     * Optimized version of dispatching onto the core scheduler through direct scheduling.
+     *
+     * This method has less GC overhead compared to {@link #scheduleWorker(Scheduler, CouchbaseResponse, Subject)}
+     * since no worker needs to be generated explicitly (but is not part of the public Scheduler interface).
+     */
+    private static void scheduleDirect(CoreScheduler scheduler, final CouchbaseResponse response,
+        final Subject<CouchbaseResponse, CouchbaseResponse> observable) {
+        scheduler.scheduleDirect(new Action0() {
+            @Override
+            public void call() {
+                try {
+                    observable.onNext(response);
+                    observable.onCompleted();
+                } catch (Exception ex) {
+                    LOGGER.warn("Caught exception while onNext on observable", ex);
+                    observable.onError(ex);
+                }
+            }
+        });
+    }
+
+    /**
+     * Dispatches the response on a generic scheduler through creating a worker.
+     */
+    private static void scheduleWorker(Scheduler scheduler, final CouchbaseResponse response,
+        final Subject<CouchbaseResponse, CouchbaseResponse> observable) {
+        final Scheduler.Worker worker = scheduler.createWorker();
+        worker.schedule(new Action0() {
+            @Override
+            public void call() {
+                try {
+                    observable.onNext(response);
+                    observable.onCompleted();
+                } catch (Exception ex) {
+                    LOGGER.warn("Caught exception while onNext on observable", ex);
+                    observable.onError(ex);
+                } finally {
+                    worker.unsubscribe();
+                }
+            }
+        });
     }
 
     /**
@@ -504,4 +587,28 @@ public abstract class AbstractGenericHandler<RESPONSE, ENCODED, REQUEST extends 
             onKeepAliveResponse(this.ctx, couchbaseResponse);
         }
     }
+
+    /**
+     * Add basic authentication headers to a {@link HttpRequest}.
+     *
+     * The given information is Base64 encoded and the authorization header is set appropriately. Since this needs
+     * to be done for every request, it is refactored out.
+     *
+     * @param ctx the handler context.
+     * @param request the request where the header should be added.
+     * @param user the username for auth.
+     * @param password the password for auth.
+     */
+    public static void addHttpBasicAuth(final ChannelHandlerContext ctx, final HttpRequest request, final String user,
+        final String password) {
+        final String pw = password == null ? "" : password;
+
+        ByteBuf raw = ctx.alloc().buffer(user.length() + pw.length() + 1);
+        raw.writeBytes((user + ":" + pw).getBytes(CHARSET));
+        ByteBuf encoded = Base64.encode(raw, false);
+        request.headers().add(HttpHeaders.Names.AUTHORIZATION, "Basic " + encoded.toString(CHARSET));
+        encoded.release();
+        raw.release();
+    }
+
 }

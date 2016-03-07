@@ -22,6 +22,8 @@
 package com.couchbase.client.core.cluster;
 
 import com.couchbase.client.core.message.ResponseStatus;
+import com.couchbase.client.core.message.kv.AppendRequest;
+import com.couchbase.client.core.message.kv.AppendResponse;
 import com.couchbase.client.core.message.kv.CounterRequest;
 import com.couchbase.client.core.message.kv.CounterResponse;
 import com.couchbase.client.core.message.kv.GetRequest;
@@ -333,6 +335,40 @@ public class KeyValueMessageTest extends ClusterDependentTest {
         assertEquals(ResponseStatus.SUCCESS, response.status());
     }
 
+    /**
+     * Verificiation for MB-15727.
+     *
+     * This test is ignored in versions lower than 4.5 since thats the version where it has been fixed.
+     */
+    @Test
+    public void shouldGetAndLockWithAppend() throws Exception {
+        assumeMinimumVersionCompatible(4, 5);
+
+        String key = "get-and-lock-append";
+
+        UpsertRequest request = new UpsertRequest(key, Unpooled.copiedBuffer("foo", CharsetUtil.UTF_8), bucket());
+        UpsertResponse response = cluster().<UpsertResponse>send(request).toBlocking().single();
+        assertEquals(ResponseStatus.SUCCESS, response.status());
+        ReferenceCountUtil.releaseLater(response.content());
+
+        GetResponse getResponse = cluster().<GetResponse>send(new GetRequest(key, bucket(), true, false, 2)).toBlocking().single();
+        assertEquals(ResponseStatus.SUCCESS, getResponse.status());
+        assertEquals("foo", getResponse.content().toString(CharsetUtil.UTF_8));
+        ReferenceCountUtil.releaseLater(getResponse.content());
+
+        AppendResponse appendResponse = cluster().<AppendResponse>send(
+            new AppendRequest(key, getResponse.cas(), Unpooled.copiedBuffer("bar", CharsetUtil.UTF_8), bucket())
+        ).toBlocking().single();
+        assertEquals(ResponseStatus.SUCCESS, getResponse.status());
+        assertTrue(getResponse.cas() != appendResponse.cas());
+        ReferenceCountUtil.releaseLater(appendResponse.content());
+
+        getResponse = cluster().<GetResponse>send(new GetRequest(key, bucket(), false, false, 0)).toBlocking().single();
+        assertEquals(ResponseStatus.SUCCESS, getResponse.status());
+        assertEquals("foobar", getResponse.content().toString(CharsetUtil.UTF_8));
+        ReferenceCountUtil.releaseLater(getResponse.content());
+    }
+
     @Test
     public void shouldTouch() throws Exception {
         String key = "touch";
@@ -431,6 +467,7 @@ public class KeyValueMessageTest extends ClusterDependentTest {
             assertTrue(token.sequenceNumber() > 0);
             assertTrue(token.vbucketUUID() != 0);
             assertTrue(token.vbucketID() > 0);
+            assertTrue(token.bucket() != null && token.bucket().equals(bucket()));
         } else {
             assertNull(token);
         }
@@ -452,6 +489,8 @@ public class KeyValueMessageTest extends ClusterDependentTest {
             assertTrue(first.vbucketUUID() != 0);
             assertTrue(first.vbucketID() > 0);
             assertTrue(second.vbucketID() > 0);
+            assertTrue(first.bucket() != null && first.bucket().equals(bucket()));
+            assertEquals(first.bucket(), second.bucket());
             assertEquals(first.vbucketUUID(), second.vbucketUUID());
             assertTrue((first.sequenceNumber()+1) == second.sequenceNumber());
             assertEquals(first.vbucketID(), second.vbucketID());

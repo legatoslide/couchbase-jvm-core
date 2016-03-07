@@ -73,10 +73,13 @@ import com.couchbase.client.core.message.kv.subdoc.BinarySubdocMultiLookupReques
 import com.couchbase.client.core.message.kv.subdoc.BinarySubdocMultiMutationRequest;
 import com.couchbase.client.core.message.kv.subdoc.BinarySubdocMutationRequest;
 import com.couchbase.client.core.message.kv.subdoc.BinarySubdocRequest;
+import com.couchbase.client.core.message.kv.subdoc.multi.Lookup;
 import com.couchbase.client.core.message.kv.subdoc.multi.LookupCommand;
-import com.couchbase.client.core.message.kv.subdoc.multi.LookupResult;
 import com.couchbase.client.core.message.kv.subdoc.multi.MultiLookupResponse;
 import com.couchbase.client.core.message.kv.subdoc.multi.MultiMutationResponse;
+import com.couchbase.client.core.message.kv.subdoc.multi.MultiResult;
+import com.couchbase.client.core.message.kv.subdoc.multi.Mutation;
+import com.couchbase.client.core.message.kv.subdoc.multi.MutationCommand;
 import com.couchbase.client.core.message.kv.subdoc.simple.SimpleSubdocResponse;
 import com.couchbase.client.core.service.ServiceType;
 import com.couchbase.client.deps.io.netty.handler.codec.memcache.binary.BinaryMemcacheOpcodes;
@@ -94,6 +97,7 @@ import io.netty.channel.ChannelHandlerContext;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.ListIterator;
 import java.util.Queue;
 
 /**
@@ -182,47 +186,10 @@ public class KeyValueHandler
     @Override
     protected BinaryMemcacheRequest encodeRequest(final ChannelHandlerContext ctx, final BinaryRequest msg)
         throws Exception {
-        BinaryMemcacheRequest request;
+        BinaryMemcacheRequest request = encodeCommonRequest(ctx, msg);
 
-        if (msg instanceof GetRequest) {
-            request = handleGetRequest(ctx, (GetRequest) msg);
-        } else if (msg instanceof BinaryStoreRequest) {
-            request = handleStoreRequest(ctx, (BinaryStoreRequest) msg);
-        } else if (msg instanceof ReplicaGetRequest) {
-            request = handleReplicaGetRequest((ReplicaGetRequest) msg);
-        } else if (msg instanceof RemoveRequest) {
-            request = handleRemoveRequest((RemoveRequest) msg);
-        } else if (msg instanceof CounterRequest) {
-            request = handleCounterRequest(ctx, (CounterRequest) msg);
-        } else if (msg instanceof TouchRequest) {
-            request = handleTouchRequest(ctx, (TouchRequest) msg);
-        } else if (msg instanceof UnlockRequest) {
-            request = handleUnlockRequest((UnlockRequest) msg);
-        } else if (msg instanceof ObserveRequest) {
-            request = handleObserveRequest(ctx, (ObserveRequest) msg);
-        } else if (msg instanceof ObserveSeqnoRequest) {
-            request = handleObserveSeqnoRequest(ctx, (ObserveSeqnoRequest) msg);
-        } else if (msg instanceof GetBucketConfigRequest) {
-            request = handleGetBucketConfigRequest();
-        } else if (msg instanceof AppendRequest) {
-            request = handleAppendRequest((AppendRequest) msg);
-        } else if (msg instanceof PrependRequest) {
-            request = handlePrependRequest((PrependRequest) msg);
-        } else if (msg instanceof KeepAliveRequest) {
-            request = handleKeepAliveRequest((KeepAliveRequest) msg);
-        } else if (msg instanceof StatRequest) {
-            request = handleStatRequest((StatRequest) msg);
-        } else if (msg instanceof GetAllMutationTokensRequest) {
-            request = handleGetAllMutationTokensRequest(ctx, (GetAllMutationTokensRequest) msg);
-        } else if (msg instanceof BinarySubdocRequest) {
-            request = handleSubdocumentRequest(ctx, (BinarySubdocRequest) msg);
-        } else if (msg instanceof BinarySubdocMultiLookupRequest) {
-            request = handleSubdocumentMultiLookupRequest(ctx, (BinarySubdocMultiLookupRequest) msg);
-        } else if (msg instanceof BinarySubdocMultiMutationRequest) {
-            request = handleSubdocumentMultiMutationRequest(ctx, (BinarySubdocMultiMutationRequest) msg);
-        } else {
-            throw new IllegalArgumentException("Unknown incoming BinaryRequest type "
-                + msg.getClass());
+        if (request == null) {
+            request = encodeOtherRequest(ctx, msg);
         }
 
         if (msg.partition() >= 0) {
@@ -241,6 +208,53 @@ public class KeyValueHandler
         }
 
         return request;
+    }
+
+    private BinaryMemcacheRequest encodeCommonRequest(final ChannelHandlerContext ctx, final BinaryRequest msg) {
+        if (msg instanceof GetRequest) {
+            return handleGetRequest(ctx, (GetRequest) msg);
+        } else if (msg instanceof BinaryStoreRequest) {
+            return handleStoreRequest(ctx, (BinaryStoreRequest) msg);
+        } else if (msg instanceof ReplicaGetRequest) {
+            return handleReplicaGetRequest((ReplicaGetRequest) msg);
+        } else if (msg instanceof RemoveRequest) {
+            return handleRemoveRequest((RemoveRequest) msg);
+        } else if (msg instanceof CounterRequest) {
+            return handleCounterRequest(ctx, (CounterRequest) msg);
+        } else if (msg instanceof TouchRequest) {
+            return handleTouchRequest(ctx, (TouchRequest) msg);
+        } else if (msg instanceof UnlockRequest) {
+            return handleUnlockRequest((UnlockRequest) msg);
+        }
+        return null;
+    }
+
+    private BinaryMemcacheRequest encodeOtherRequest(final ChannelHandlerContext ctx, final BinaryRequest msg) {
+        if (msg instanceof ObserveRequest) {
+            return handleObserveRequest(ctx, (ObserveRequest) msg);
+        } else if (msg instanceof ObserveSeqnoRequest) {
+            return handleObserveSeqnoRequest(ctx, (ObserveSeqnoRequest) msg);
+        } else if (msg instanceof GetBucketConfigRequest) {
+            return handleGetBucketConfigRequest();
+        } else if (msg instanceof AppendRequest) {
+            return handleAppendRequest((AppendRequest) msg);
+        } else if (msg instanceof PrependRequest) {
+            return handlePrependRequest((PrependRequest) msg);
+        } else if (msg instanceof KeepAliveRequest) {
+            return handleKeepAliveRequest((KeepAliveRequest) msg);
+        } else if (msg instanceof StatRequest) {
+            return handleStatRequest((StatRequest) msg);
+        } else if (msg instanceof GetAllMutationTokensRequest) {
+            return handleGetAllMutationTokensRequest(ctx, (GetAllMutationTokensRequest) msg);
+        } else if (msg instanceof BinarySubdocRequest) {
+            return handleSubdocumentRequest(ctx, (BinarySubdocRequest) msg);
+        } else if (msg instanceof BinarySubdocMultiLookupRequest) {
+            return handleSubdocumentMultiLookupRequest(ctx, (BinarySubdocMultiLookupRequest) msg);
+        } else if (msg instanceof BinarySubdocMultiMutationRequest) {
+            return handleSubdocumentMultiMutationRequest(ctx, (BinarySubdocMultiMutationRequest) msg);
+        } else {
+            throw new IllegalArgumentException("Unknown incoming BinaryRequest type " + msg.getClass());
+        }
     }
 
     /**
@@ -604,6 +618,7 @@ public class KeyValueHandler
 
         FullBinaryMemcacheRequest request = new DefaultFullBinaryMemcacheRequest(key, extras, msg.content());
         request.setOpcode(OP_SUB_MULTI_MUTATION)
+                .setCAS(msg.cas())
                 .setKeyLength(keyLength)
                 .setExtrasLength(extrasLength)
                 .setTotalBodyLength(keyLength + msg.content().readableBytes() + extrasLength);
@@ -626,7 +641,7 @@ public class KeyValueHandler
         }
 
         msg.content().retain();
-        CouchbaseResponse response = handleCommonResponseMessages(request, msg, ctx, status, seqOnMutation);
+        CouchbaseResponse response = handleCommonResponseMessages(request, msg, status, seqOnMutation);
 
         if (response == null) {
             response = handleSubdocumentResponseMessages(request, msg, ctx, status, seqOnMutation);
@@ -670,12 +685,11 @@ public class KeyValueHandler
      *
      * @param request the current request.
      * @param msg the current response message.
-     * @param ctx the handler context.
      * @param status the response status code.
      * @return the decoded response or null if none did match.
      */
     private static CouchbaseResponse handleCommonResponseMessages(BinaryRequest request, FullBinaryMemcacheResponse msg,
-         ChannelHandlerContext ctx, ResponseStatus status, boolean seqOnMutation) {
+        ResponseStatus status, boolean seqOnMutation) {
         CouchbaseResponse response = null;
         ByteBuf content = msg.content();
         long cas = msg.getCAS();
@@ -683,22 +697,22 @@ public class KeyValueHandler
         String bucket = request.bucket();
 
         if (request instanceof GetRequest || request instanceof ReplicaGetRequest) {
-            int flags = extractFlagsFromGetResponse(ctx, msg.getExtras(), msg.getExtrasLength());
+            int flags = msg.getExtrasLength() > 0 ? msg.getExtras().getInt(0) : 0;
             response = new GetResponse(status, statusCode, cas, flags, bucket, content, request);
         } else if (request instanceof GetBucketConfigRequest) {
             response = new GetBucketConfigResponse(status, statusCode, bucket, content,
                     ((GetBucketConfigRequest) request).hostname());
         } else if (request instanceof InsertRequest) {
-            MutationToken descr = extractToken(seqOnMutation, status.isSuccess(), msg.getExtras(), request.partition());
+            MutationToken descr = extractToken(bucket, seqOnMutation, status.isSuccess(), msg.getExtras(), request.partition());
             response = new InsertResponse(status, statusCode, cas, bucket, content, descr, request);
         } else if (request instanceof UpsertRequest) {
-            MutationToken descr = extractToken(seqOnMutation, status.isSuccess(), msg.getExtras(), request.partition());
+            MutationToken descr = extractToken(bucket, seqOnMutation, status.isSuccess(), msg.getExtras(), request.partition());
             response = new UpsertResponse(status, statusCode, cas, bucket, content, descr, request);
         } else if (request instanceof ReplaceRequest) {
-            MutationToken descr = extractToken(seqOnMutation, status.isSuccess(), msg.getExtras(), request.partition());
+            MutationToken descr = extractToken(bucket, seqOnMutation, status.isSuccess(), msg.getExtras(), request.partition());
             response = new ReplaceResponse(status, statusCode, cas, bucket, content, descr, request);
         } else if (request instanceof RemoveRequest) {
-            MutationToken descr = extractToken(seqOnMutation, status.isSuccess(), msg.getExtras(), request.partition());
+            MutationToken descr = extractToken(bucket, seqOnMutation, status.isSuccess(), msg.getExtras(), request.partition());
             response = new RemoveResponse(status, statusCode, cas, bucket, content, descr, request);
         }
 
@@ -725,7 +739,7 @@ public class KeyValueHandler
 
         MutationToken mutationToken = null;
         if (msg.getExtrasLength() > 0) {
-            mutationToken = extractToken(seqOnMutation, status.isSuccess(), msg.getExtras(), request.partition());
+            mutationToken = extractToken(bucket, seqOnMutation, status.isSuccess(), msg.getExtras(), request.partition());
         }
 
         ByteBuf fragment;
@@ -760,11 +774,11 @@ public class KeyValueHandler
         String bucket = request.bucket();
 
         ByteBuf body = msg.content();
-        List<LookupResult> responses;
+        List<MultiResult<Lookup>> responses;
         if (status.isSuccess() || ResponseStatus.SUBDOC_MULTI_PATH_FAILURE.equals(status)) {
             long bodyLength = body.readableBytes();
             List<LookupCommand> commands = subdocRequest.commands();
-            responses = new ArrayList<LookupResult>(commands.size());
+            responses = new ArrayList<MultiResult<Lookup>>(commands.size());
             for (LookupCommand cmd : commands) {
                 if (msg.content().readableBytes() < 6) {
                     body.release();
@@ -776,7 +790,7 @@ public class KeyValueHandler
                 ByteBuf value = ctx.alloc().buffer(valueLength, valueLength);
                 value.writeBytes(body, valueLength);
 
-                responses.add(new LookupResult(cmdStatus, ResponseStatusConverter.fromBinary(cmdStatus),
+                responses.add(MultiResult.create(cmdStatus, ResponseStatusConverter.fromBinary(cmdStatus),
                         cmd.path(), cmd.lookup(), value));
             }
         } else {
@@ -800,6 +814,7 @@ public class KeyValueHandler
             FullBinaryMemcacheResponse msg, ChannelHandlerContext ctx, ResponseStatus status, boolean seqOnMutation) {
         if (!(request instanceof BinarySubdocMultiMutationRequest))
             return null;
+
         BinarySubdocMultiMutationRequest subdocRequest = (BinarySubdocMultiMutationRequest) request;
 
         long cas = msg.getCAS();
@@ -808,16 +823,74 @@ public class KeyValueHandler
 
         MutationToken mutationToken = null;
         if (msg.getExtrasLength() > 0) {
-            mutationToken = extractToken(seqOnMutation, status.isSuccess(), msg.getExtras(), request.partition());
+            mutationToken = extractToken(bucket, seqOnMutation, status.isSuccess(), msg.getExtras(), request.partition());
         }
 
-        ByteBuf body = msg.content();
         MultiMutationResponse response;
+        ByteBuf body = msg.content();
+        List<MultiResult<Mutation>> responses;
         if (status.isSuccess()) {
-            response = new MultiMutationResponse(bucket, subdocRequest, cas, mutationToken);
+            List<MutationCommand> commands = subdocRequest.commands();
+            responses = new ArrayList<MultiResult<Mutation>>(commands.size());
+            //MB-17842: Mutations can have a value, so there could be individual results
+            //but only mutation commands that provide a value will have an explicit result in the binary response.
+            //However, we still want MutationResult for all of the commands
+            ListIterator<MutationCommand> it = commands.listIterator();
+            int explicitResultSize = 0;
+            //as long as there is an explicit response to read...
+            while(msg.content().readableBytes() >= 7) {
+                explicitResultSize++;
+                //...read the data
+                byte responseIndex = body.readByte();
+                short responseStatus = body.readShort(); //will this always be SUCCESS?
+                int responseLength = body.readInt();
+                ByteBuf responseValue;
+                if (responseLength > 0) {
+                    responseValue = ctx.alloc().buffer(responseLength, responseLength);
+                    responseValue.writeBytes(body, responseLength);
+                } else {
+                    responseValue = Unpooled.EMPTY_BUFFER; //can an explicit response be 0-length (empty)?
+                }
+
+                //...sanity check response so subsequent loop don't run forever
+                if (it.nextIndex() > responseIndex) {
+                    body.release();
+                    throw new IllegalStateException("Unable to interpret multi mutation response, responseIndex = " +
+                        responseIndex + " while next available command was #" + it.nextIndex());
+                }
+
+                ///...catch up on all commands before current one that didn't get an explicit response
+                while(it.nextIndex() < responseIndex) {
+                    MutationCommand noResultCommand = it.next();
+                    responses.add(MultiResult.create(KeyValueStatus.SUCCESS.code(), ResponseStatus.SUCCESS,
+                            noResultCommand.path(), noResultCommand.mutation(),
+                            Unpooled.EMPTY_BUFFER));
+                }
+
+                //...then process the one that did get an explicit response
+                MutationCommand cmd = it.next();
+                responses.add(MultiResult.create(responseStatus, ResponseStatusConverter.fromBinary(responseStatus),
+                        cmd.path(), cmd.mutation(), responseValue));
+            }
+            //...and finally the remainder of commands after the last one that got an explicit response:
+            while(it.hasNext()) {
+                MutationCommand noResultCommand = it.next();
+                responses.add(MultiResult.create(KeyValueStatus.SUCCESS.code(), ResponseStatus.SUCCESS,
+                        noResultCommand.path(), noResultCommand.mutation(),
+                        Unpooled.EMPTY_BUFFER));
+            }
+
+            if (responses.size() != commands.size()) {
+                body.release();
+                throw new IllegalStateException("Multi mutation spec size and result size differ: " + commands.size() +
+                    " vs " + responses.size() + ", including " + explicitResultSize + " explicit results");
+            }
+
+            response = new MultiMutationResponse(bucket, subdocRequest, cas, mutationToken, responses);
         } else if (ResponseStatus.SUBDOC_MULTI_PATH_FAILURE.equals(status)) {
-            short firstErrorCode = body.readShort();
+            //MB-17842: order of index and status has been swapped
             byte firstErrorIndex = body.readByte();
+            short firstErrorCode = body.readShort();
             response = new MultiMutationResponse(status, statusCode, bucket, firstErrorIndex, firstErrorCode,
                     subdocRequest, cas, mutationToken);
         } else {
@@ -827,9 +900,9 @@ public class KeyValueHandler
         return response;
     }
 
-    private static MutationToken extractToken(boolean seqOnMutation, boolean success, ByteBuf extras, long vbid) {
+    private static MutationToken extractToken(String bucket, boolean seqOnMutation, boolean success, ByteBuf extras, long vbid) {
         if (success && seqOnMutation) {
-            return new MutationToken(vbid, extras.readLong(), extras.readLong());
+            return new MutationToken(vbid, extras.readLong(), extras.readLong(), bucket);
         }
         return null;
     }
@@ -855,10 +928,10 @@ public class KeyValueHandler
         } else if (request instanceof TouchRequest) {
             response = new TouchResponse(status, statusCode, bucket, content, request);
         } else if (request instanceof AppendRequest) {
-            MutationToken descr = extractToken(seqOnMutation, status.isSuccess(), msg.getExtras(), request.partition());
+            MutationToken descr = extractToken(bucket, seqOnMutation, status.isSuccess(), msg.getExtras(), request.partition());
             response = new AppendResponse(status, statusCode, cas, bucket, content, descr, request);
         } else if (request instanceof PrependRequest) {
-            MutationToken descr = extractToken(seqOnMutation, status.isSuccess(), msg.getExtras(), request.partition());
+            MutationToken descr = extractToken(bucket, seqOnMutation, status.isSuccess(), msg.getExtras(), request.partition());
             response = new PrependResponse(status, statusCode, cas, bucket, content, descr, request);
         } else if (request instanceof KeepAliveRequest) {
             releaseContent(content);
@@ -867,7 +940,7 @@ public class KeyValueHandler
             long value = status.isSuccess() ? content.readLong() : 0;
             releaseContent(content);
 
-            MutationToken descr = extractToken(seqOnMutation, status.isSuccess(), msg.getExtras(), request.partition());
+            MutationToken descr = extractToken(bucket, seqOnMutation, status.isSuccess(), msg.getExtras(), request.partition());
             response = new CounterResponse(status, statusCode, bucket, value, cas, descr, request);
         } else if (request instanceof StatRequest) {
             String key = msg.getKey();
@@ -879,7 +952,7 @@ public class KeyValueHandler
             // 2 bytes for partition ID, and 8 bytes for sequence number
             MutationToken[] mutationTokens = new MutationToken[content.readableBytes() / 10];
             for (int i = 0; i < mutationTokens.length; i++) {
-                mutationTokens[i] = new MutationToken((long)content.readShort(), 0, content.readLong());
+                mutationTokens[i] = new MutationToken((long)content.readShort(), 0, content.readLong(), request.bucket());
             }
             releaseContent(content);
             response = new GetAllMutationTokensResponse(mutationTokens, status, statusCode, bucket, request);
@@ -973,26 +1046,6 @@ public class KeyValueHandler
         if (content != null && content.refCnt() > 0) {
             content.release();
         }
-    }
-
-    /**
-     * Helper method to extract the flags from the extras buffer.
-     *
-     * @param ctx the handler context.
-     * @param extrasReleased the extras of the msg.
-     * @param extrasLength the extras length.
-     * @return the extracted flags.
-     */
-    private static int extractFlagsFromGetResponse(ChannelHandlerContext ctx, ByteBuf extrasReleased,
-        int extrasLength) {
-        int flags = 0;
-        if (extrasLength > 0) {
-            final ByteBuf extras = ctx.alloc().buffer(extrasLength);
-            extras.writeBytes(extrasReleased, extrasReleased.readerIndex(), extrasReleased.readableBytes());
-            flags = extras.getInt(0);
-            extras.release();
-        }
-        return flags;
     }
 
     /**

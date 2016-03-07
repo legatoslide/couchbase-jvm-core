@@ -31,9 +31,9 @@ import com.couchbase.client.core.message.kv.UpsertRequest;
 import com.couchbase.client.core.message.kv.UpsertResponse;
 import com.couchbase.client.core.message.kv.subdoc.multi.Lookup;
 import com.couchbase.client.core.message.kv.subdoc.multi.LookupCommand;
-import com.couchbase.client.core.message.kv.subdoc.multi.LookupResult;
 import com.couchbase.client.core.message.kv.subdoc.multi.MultiLookupResponse;
 import com.couchbase.client.core.message.kv.subdoc.multi.MultiMutationResponse;
+import com.couchbase.client.core.message.kv.subdoc.multi.MultiResult;
 import com.couchbase.client.core.message.kv.subdoc.multi.Mutation;
 import com.couchbase.client.core.message.kv.subdoc.multi.MutationCommand;
 import com.couchbase.client.core.message.kv.subdoc.multi.SubMultiLookupRequest;
@@ -56,7 +56,6 @@ import io.netty.util.CharsetUtil;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.ResourceLeakDetector;
 import org.junit.After;
-import org.junit.Assume;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -935,11 +934,11 @@ public class SubdocumentMessageTest extends ClusterDependentTest {
 
     @Test
     public void shouldHaveIndividualResultsOnSparseMultiLookup() {
-        String expected = "EXIST(sub) = SUCCESS\n" +
-                "EXIST(sub2) = SUBDOC_PATH_NOT_FOUND\n" +
-                "GET(sub) = SUCCESS: {\"value\": \"subStringValue\",\"array\": [\"array1\", 2, true]}\n" +
-                "GET(sub.array[1]) = SUCCESS: 2\n" +
-                "GET(sub2) = SUBDOC_PATH_NOT_FOUND\n";
+        String expected = "EXIST(sub): SUCCESS\n" +
+                "EXIST(sub2): SUBDOC_PATH_NOT_FOUND\n" +
+                "GET(sub): SUCCESS = {\"value\": \"subStringValue\",\"array\": [\"array1\", 2, true]}\n" +
+                "GET(sub.array[1]): SUCCESS = 2\n" +
+                "GET(sub2): SUBDOC_PATH_NOT_FOUND\n";
 
         SubMultiLookupRequest request = new SubMultiLookupRequest(testSubKey, bucket(),
                 new LookupCommand(Lookup.EXIST, "sub"),
@@ -951,7 +950,7 @@ public class SubdocumentMessageTest extends ClusterDependentTest {
         MultiLookupResponse response = cluster().<MultiLookupResponse>send(request).toBlocking().single();
         assertEquals(Unpooled.EMPTY_BUFFER, response.content());
         StringBuilder body = new StringBuilder();
-        for (LookupResult r : response.responses()) {
+        for (MultiResult r : response.responses()) {
             body.append(r.toString()).append('\n');
             ReferenceCountUtil.release(r.value());
         }
@@ -962,8 +961,8 @@ public class SubdocumentMessageTest extends ClusterDependentTest {
 
     @Test
     public void shouldHaveIndividualResultsOnFullySuccessfulMultiLookup() {
-        String expected = "EXIST(sub) = SUCCESS\n" +
-                "GET(sub.array[1]) = SUCCESS: 2\n";
+        String expected = "EXIST(sub): SUCCESS\n" +
+                "GET(sub.array[1]): SUCCESS = 2\n";
 
         SubMultiLookupRequest request = new SubMultiLookupRequest(testSubKey, bucket(),
                 new LookupCommand(Lookup.EXIST, "sub"),
@@ -972,7 +971,7 @@ public class SubdocumentMessageTest extends ClusterDependentTest {
         MultiLookupResponse response = cluster().<MultiLookupResponse>send(request).toBlocking().single();
         assertEquals(Unpooled.EMPTY_BUFFER, response.content());
         StringBuilder body = new StringBuilder();
-        for (LookupResult r : response.responses()) {
+        for (MultiResult r : response.responses()) {
             body.append(r.toString()).append('\n');
             ReferenceCountUtil.release(r.value());
         }
@@ -984,7 +983,7 @@ public class SubdocumentMessageTest extends ClusterDependentTest {
     @Test
     public void shouldApplyAllMultiMutationsAndReleaseCommandFragments() {
         ByteBuf counterFragment = Unpooled.copiedBuffer("-404", CharsetUtil.UTF_8);
-        counterFragment.retain();
+        counterFragment.retain(2);
 
         ByteBuf stringFragment = Unpooled.copiedBuffer("\"mutated\"", CharsetUtil.UTF_8);
         stringFragment.retain(2);
@@ -994,17 +993,21 @@ public class SubdocumentMessageTest extends ClusterDependentTest {
         ByteBuf arrayLastFragment = Unpooled.copiedBuffer("\"last\"", CharsetUtil.UTF_8);
         ByteBuf uniqueFragment = Unpooled.copiedBuffer("\"unique\"", CharsetUtil.UTF_8);
 
-        SubMultiMutationRequest request = new SubMultiMutationRequest(testSubKey, bucket(),
+        MutationCommand[] commands = new MutationCommand[] {
                 new MutationCommand(Mutation.COUNTER, "counter", counterFragment, false),
                 new MutationCommand(Mutation.COUNTER, "another.counter", counterFragment, true),
+                new MutationCommand(Mutation.COUNTER, "another.counter", counterFragment, false),
                 new MutationCommand(Mutation.DICT_ADD, "sub.value2", stringFragment),
                 new MutationCommand(Mutation.DICT_UPSERT, "sub.value3", stringFragment),
                 new MutationCommand(Mutation.REPLACE, "value", stringFragment),
                 new MutationCommand(Mutation.ARRAY_INSERT, "sub.array[1]", arrayInsertedFragment),
                 new MutationCommand(Mutation.ARRAY_PUSH_FIRST, "sub.array", arrayFirstFragment),
                 new MutationCommand(Mutation.ARRAY_PUSH_LAST, "sub.array", arrayLastFragment),
-                new MutationCommand(Mutation.ARRAY_ADD_UNIQUE, "sub.array", uniqueFragment)
-        );
+                new MutationCommand(Mutation.ARRAY_ADD_UNIQUE, "sub.array", uniqueFragment),
+                new MutationCommand(Mutation.DELETE, "sub.value")
+        };
+
+        SubMultiMutationRequest request = new SubMultiMutationRequest(testSubKey, bucket(), commands);
         MultiMutationResponse response = cluster().<MultiMutationResponse>send(request).toBlocking().single();
         assertEquals(ResponseStatus.SUCCESS, response.status());
         assertEquals(Unpooled.EMPTY_BUFFER, response.content());
@@ -1018,14 +1021,40 @@ public class SubdocumentMessageTest extends ClusterDependentTest {
         assertEquals(0, arrayLastFragment.refCnt());
         assertEquals(0, uniqueFragment.refCnt());
 
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < commands.length; i++) {
+            MutationCommand command = commands[i];
+            MultiResult result = response.responses().get(i);
+            assertEquals(command.path(), result.path());
+            assertEquals(command.mutation(), result.operation());
+
+            sb.append('\n').append(result);
+            ReferenceCountUtil.releaseLater(result.value());
+        }
+        if (sb.length() > 1) sb.deleteCharAt(0);
+
+        String expectedResponse = "COUNTER(counter): SUCCESS = -404" +
+                "\nCOUNTER(another.counter): SUCCESS = -404" +
+                "\nCOUNTER(another.counter): SUCCESS = -808" +
+                //values below have no content
+                "\nDICT_ADD(sub.value2): SUCCESS" +
+                "\nDICT_UPSERT(sub.value3): SUCCESS" +
+                "\nREPLACE(value): SUCCESS" +
+                "\nARRAY_INSERT(sub.array[1]): SUCCESS" +
+                "\nARRAY_PUSH_FIRST(sub.array): SUCCESS" +
+                "\nARRAY_PUSH_LAST(sub.array): SUCCESS" +
+                "\nARRAY_ADD_UNIQUE(sub.array): SUCCESS" +
+                "\nDELETE(sub.value): SUCCESS";
+        assertEquals(expectedResponse, sb.toString());
+
         String expected = "{\"value\":\"mutated\"," +
                 "\"sub\":{" +
-                "\"value\":\"subStringValue\"," +
+//                "\"value\":\"subStringValue\"," + //DELETED
                 "\"array\":[\"first\",\"array1\",\"inserted\",2,true,\"last\",\"unique\"]" +
                 ",\"value2\":\"mutated\"" +
                 ",\"value3\":\"mutated\"}," +
                 "\"counter\":-404," +
-                "\"another\":{\"counter\":-404}}";
+                "\"another\":{\"counter\":-808}}";
         assertMutation(testSubKey, expected);
     }
 
@@ -1052,13 +1081,16 @@ public class SubdocumentMessageTest extends ClusterDependentTest {
                 new MutationCommand(Mutation.ARRAY_INSERT, "sub.array[5]", arrayInsertedFragment),
                 new MutationCommand(Mutation.ARRAY_PUSH_FIRST, "sub.array", arrayFirstFragment),
                 new MutationCommand(Mutation.ARRAY_PUSH_LAST, "sub.array", arrayLastFragment),
-                new MutationCommand(Mutation.ARRAY_ADD_UNIQUE, "sub.array", uniqueFragment)
+                new MutationCommand(Mutation.ARRAY_ADD_UNIQUE, "sub.array", uniqueFragment),
+                //this one would also fail, but server stops at first failure
+                new MutationCommand(Mutation.DELETE, "path.not.found")
         );
         MultiMutationResponse response = cluster().<MultiMutationResponse>send(request).toBlocking().single();
         assertEquals(ResponseStatus.SUBDOC_MULTI_PATH_FAILURE, response.status());
         assertEquals(Unpooled.EMPTY_BUFFER, response.content());
         assertEquals(5, response.firstErrorIndex());
         assertEquals(ResponseStatus.SUBDOC_PATH_NOT_FOUND, response.firstErrorStatus());
+        assertEquals(0, response.responses().size());
 
         assertEquals(0, stringFragment.refCnt());
         assertEquals(0, counterFragment.refCnt());
@@ -1081,13 +1113,15 @@ public class SubdocumentMessageTest extends ClusterDependentTest {
         SubMultiMutationRequest request = new SubMultiMutationRequest(testInsertionSubKey, bucket(),
                 new MutationCommand(Mutation.COUNTER, "counter", counterFragment, false),
                 new MutationCommand(Mutation.DICT_UPSERT, "sub.value3", stringFragment),
-                new MutationCommand(Mutation.ARRAY_PUSH_FIRST, "sub.array", arrayFirstFragment)
+                new MutationCommand(Mutation.ARRAY_PUSH_FIRST, "sub.array", arrayFirstFragment),
+                new MutationCommand(Mutation.DELETE, "some.paht")
         );
         MultiMutationResponse response = cluster().<MultiMutationResponse>send(request).toBlocking().single();
         assertEquals(ResponseStatus.NOT_EXISTS, response.status());
         assertEquals(Unpooled.EMPTY_BUFFER, response.content());
         assertEquals(-1, response.firstErrorIndex());
         assertEquals(ResponseStatus.FAILURE, response.firstErrorStatus());
+        assertEquals(0, response.responses().size());
 
         assertEquals(0, stringFragment.refCnt());
         assertEquals(0, counterFragment.refCnt());

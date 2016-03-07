@@ -21,13 +21,19 @@
  */
 package com.couchbase.client.core.node.locate;
 
+import com.couchbase.client.core.ResponseEvent;
 import com.couchbase.client.core.ServiceNotAvailableException;
 import com.couchbase.client.core.config.BucketConfig;
 import com.couchbase.client.core.config.ClusterConfig;
 import com.couchbase.client.core.config.CouchbaseBucketConfig;
+import com.couchbase.client.core.env.CoreEnvironment;
 import com.couchbase.client.core.message.CouchbaseRequest;
 import com.couchbase.client.core.node.Node;
-import java.util.Set;
+import com.couchbase.client.core.retry.RetryHelper;
+import com.couchbase.client.core.service.ServiceType;
+import com.lmax.disruptor.RingBuffer;
+
+import java.util.List;
 
 public class ViewLocator implements Locator {
 
@@ -37,21 +43,37 @@ public class ViewLocator implements Locator {
     private long counter = 0;
 
     @Override
-    public Node[] locate(CouchbaseRequest request, Set<Node> nodes, ClusterConfig config) {
+    public void locateAndDispatch(CouchbaseRequest request, List<Node> nodes, ClusterConfig config,
+        CoreEnvironment env, RingBuffer<ResponseEvent> responseBuffer) {
         BucketConfig bucketConfig = config.bucketConfig(request.bucket());
         if (!(bucketConfig instanceof CouchbaseBucketConfig)) {
             request.observable().onError(NOT_AVAILABLE);
-            return null;
+            return;
         }
 
-        int item = (int) counter++ % nodes.size();
-        int i = 0;
-        for (Node node : nodes) {
-            if (i++ == item && ((CouchbaseBucketConfig) bucketConfig).hasPrimaryPartitionsOnNode(node.hostname())) {
-                return new Node[] { node };
+        int nodeSize = nodes.size();
+        int offset = (int) counter++ % nodeSize;
+
+        for (int i = offset; i < nodeSize; i++) {
+            Node node = nodes.get(i);
+            if (checkNode(node, (CouchbaseBucketConfig) bucketConfig)) {
+                node.send(request);
+                return;
             }
         }
 
-        return new Node[] {};
+        for (int i = 0; i < offset; i++) {
+            Node node = nodes.get(i);
+            if (checkNode(node, (CouchbaseBucketConfig) bucketConfig)) {
+                node.send(request);
+                return;
+            }
+        }
+
+        RetryHelper.retryOrCancel(env, request, responseBuffer);
+    }
+
+    protected boolean checkNode(final Node node, CouchbaseBucketConfig config) {
+        return node.serviceEnabled(ServiceType.VIEW) && config.hasPrimaryPartitionsOnNode(node.hostname());
     }
 }

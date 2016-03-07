@@ -16,7 +16,7 @@
 
     <groupId>com.couchbase.client</groupId>
     <artifactId>core-io</artifactId>
-    <version>1.2.4-SNAPSHOT</version>
+    <version>1.2.6-SNAPSHOT</version>
     <packaging>jar</packaging>
 
     <name>Couchbase JVM Core IO</name>
@@ -139,6 +139,17 @@
             <scope>provided</scope>
         </dependency>
 
+        <!-- Compilation dependency to mark exception to enforced JDK 6 API -->
+        <dependency>
+            <groupId>org.codehaus.mojo</groupId>
+            <artifactId>animal-sniffer-annotations</artifactId>
+            <version>1.14</version>
+            <optional>true</optional>
+            <!-- if you are using badly written Maven plugins then blame them and add
+            <scope>provided</scope>
+            -->
+        </dependency>
+
         <!-- Test Dependencies -->
         <dependency>
             <groupId>junit</groupId>
@@ -234,6 +245,13 @@
                             <pattern>com.lmax</pattern>
                             <shadedPattern>com.couchbase.client.deps.com.lmax</shadedPattern>
                         </relocation>
+                        <!-- This is a hack, it should actually be an exclusion pattern on io.netty
+                             but for some reason this doesn't work. This is a workaround to repair
+                             the renaming damage done by the earlier io.netty rule. -->
+                        <relocation>
+                            <pattern>com.couchbase.client.deps.com.couchbase.client</pattern>
+                            <shadedPattern>com.couchbase.client</shadedPattern>
+                        </relocation>
                     </relocations>
                     <createSourcesJar>true</createSourcesJar>
                     <shadeSourcesContent>true</shadeSourcesContent>
@@ -299,6 +317,28 @@
                     <execution>
                         <goals>
                             <goal>revision</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>animal-sniffer-maven-plugin</artifactId>
+                <version>1.14</version>
+                <configuration>
+                    <signature>
+                        <groupId>org.codehaus.mojo.signature</groupId>
+                        <artifactId>java16</artifactId>
+                        <version>1.0</version>
+                    </signature>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>ensure-java-1.6-class-library</id>
+                        <phase>compile</phase>
+                        <goals>
+                            <goal>check</goal>
                         </goals>
                     </execution>
                 </executions>

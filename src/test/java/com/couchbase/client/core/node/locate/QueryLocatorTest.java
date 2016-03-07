@@ -25,16 +25,18 @@ import com.couchbase.client.core.config.ClusterConfig;
 import com.couchbase.client.core.message.query.GenericQueryRequest;
 import com.couchbase.client.core.message.query.QueryRequest;
 import com.couchbase.client.core.node.Node;
+import com.couchbase.client.core.service.ServiceType;
 import org.junit.Test;
 
 import java.net.InetAddress;
+import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashSet;
-import java.util.Set;
+import java.util.List;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotEquals;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -51,27 +53,68 @@ public class QueryLocatorTest {
 
         QueryRequest request = mock(GenericQueryRequest.class);
         ClusterConfig configMock = mock(ClusterConfig.class);
-        Set<Node> nodes = new HashSet<Node>();
+        List<Node> nodes = new ArrayList<Node>();
+
         Node node1Mock = mock(Node.class);
+        when(node1Mock.serviceEnabled(ServiceType.QUERY)).thenReturn(true);
         when(node1Mock.hostname()).thenReturn(InetAddress.getByName("192.168.56.101"));
         Node node2Mock = mock(Node.class);
+        when(node2Mock.serviceEnabled(ServiceType.QUERY)).thenReturn(true);
         when(node2Mock.hostname()).thenReturn(InetAddress.getByName("192.168.56.102"));
         nodes.addAll(Arrays.asList(node1Mock, node2Mock));
 
-        Node[] located = locator.locate(request, nodes, configMock);
-        assertEquals(1, located.length);
-        InetAddress foundFirst = located[0].hostname();
+        locator.locateAndDispatch(request, nodes, configMock, null, null);
+        verify(node1Mock, times(1)).send(request);
+        verify(node2Mock, never()).send(request);
 
-        located = locator.locate(request, nodes, configMock);
-        assertEquals(1, located.length);
-        InetAddress foundSecond = located[0].hostname();
+        locator.locateAndDispatch(request, nodes, configMock, null, null);
+        verify(node1Mock, times(1)).send(request);
+        verify(node2Mock, times(1)).send(request);
 
-        located = locator.locate(request, nodes, configMock);
-        assertEquals(1, located.length);
-        InetAddress foundLast = located[0].hostname();
+        locator.locateAndDispatch(request, nodes, configMock, null, null);
+        verify(node1Mock, times(2)).send(request);
+        verify(node2Mock, times(1)).send(request);
+    }
 
-        assertEquals(foundFirst, foundLast);
-        assertNotEquals(foundFirst, foundSecond);
+    @Test
+    public void shouldSkipNodeWithoutServiceEnabled() throws Exception {
+        Locator locator = new QueryLocator();
+
+        GenericQueryRequest request = mock(GenericQueryRequest.class);
+        when(request.bucket()).thenReturn("default");
+        ClusterConfig configMock = mock(ClusterConfig.class);
+
+        List<Node> nodes = new ArrayList<Node>();
+        Node node1Mock = mock(Node.class);
+        when(node1Mock.hostname()).thenReturn(InetAddress.getByName("192.168.56.101"));
+        when(node1Mock.serviceEnabled(ServiceType.QUERY)).thenReturn(false);
+        Node node2Mock = mock(Node.class);
+        when(node2Mock.hostname()).thenReturn(InetAddress.getByName("192.168.56.102"));
+        when(node2Mock.serviceEnabled(ServiceType.QUERY)).thenReturn(true);
+        Node node3Mock = mock(Node.class);
+        when(node3Mock.hostname()).thenReturn(InetAddress.getByName("192.168.56.103"));
+        when(node3Mock.serviceEnabled(ServiceType.QUERY)).thenReturn(false);
+        nodes.addAll(Arrays.asList(node1Mock, node2Mock, node3Mock));
+
+        locator.locateAndDispatch(request, nodes, configMock, null, null);
+        verify(node1Mock, never()).send(request);
+        verify(node2Mock, times(1)).send(request);
+        verify(node3Mock, never()).send(request);
+
+        locator.locateAndDispatch(request, nodes, configMock, null, null);
+        verify(node1Mock, never()).send(request);
+        verify(node2Mock, times(2)).send(request);
+        verify(node3Mock, never()).send(request);
+
+        locator.locateAndDispatch(request, nodes, configMock, null, null);
+        verify(node1Mock, never()).send(request);
+        verify(node2Mock, times(3)).send(request);
+        verify(node3Mock, never()).send(request);
+
+        locator.locateAndDispatch(request, nodes, configMock, null, null);
+        verify(node1Mock, never()).send(request);
+        verify(node2Mock, times(4)).send(request);
+        verify(node3Mock, never()).send(request);
     }
 
 }

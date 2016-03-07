@@ -43,6 +43,8 @@ public class ServiceFactory {
                 return new QueryService(hostname, bucket, password, port, env, responseBuffer);
             case DCP:
                 return new DCPService(hostname, bucket, password, port, env, responseBuffer);
+            case SEARCH:
+                return new SearchService(hostname, bucket, password, port, env, responseBuffer);
             default:
                 throw new IllegalArgumentException("Unknown Service Type: " + type);
         }

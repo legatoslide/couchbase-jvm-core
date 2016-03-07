@@ -31,15 +31,17 @@ import com.couchbase.client.core.node.Node;
 import com.couchbase.client.core.state.LifecycleState;
 import io.netty.util.CharsetUtil;
 import org.junit.Test;
+
 import java.net.InetAddress;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashSet;
-import java.util.LinkedHashSet;
-import java.util.Set;
+import java.util.List;
 
-import static org.junit.Assert.assertEquals;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -60,7 +62,7 @@ public class KeyValueLocatorTest {
 
         GetRequest getRequestMock = mock(GetRequest.class);
         ClusterConfig configMock = mock(ClusterConfig.class);
-        Set<Node> nodes = new HashSet<Node>();
+        List<Node> nodes = new ArrayList<Node>();
         Node node1Mock = mock(Node.class);
         when(node1Mock.hostname()).thenReturn(InetAddress.getByName("192.168.56.101"));
         Node node2Mock = mock(Node.class);
@@ -76,15 +78,16 @@ public class KeyValueLocatorTest {
         when(bucketMock.nodeIndexForMaster(656)).thenReturn((short) 0);
         when(bucketMock.nodeAtIndex(0)).thenReturn(nodeInfo1);
 
-        Node[] foundNodes = locator.locate(getRequestMock, nodes, configMock);
-        assertEquals(node1Mock, foundNodes[0]);
+        locator.locateAndDispatch(getRequestMock, nodes, configMock, null, null);
+        verify(node1Mock, times(1)).send(getRequestMock);
+        verify(node2Mock, never()).send(getRequestMock);
     }
 
     @Test
     public void shouldPickTheRightNodeForGetBucketConfigRequest() throws Exception {
         Locator locator = new KeyValueLocator();
 
-        Set<Node> nodes = new LinkedHashSet<Node>();
+        List<Node> nodes = new ArrayList<Node>();
         Node node1Mock = mock(Node.class);
         when(node1Mock.hostname()).thenReturn(InetAddress.getByName("192.168.56.101"));
         when(node1Mock.isState(LifecycleState.CONNECTED)).thenReturn(true);
@@ -96,8 +99,9 @@ public class KeyValueLocatorTest {
         GetBucketConfigRequest requestMock = mock(GetBucketConfigRequest.class);
         when(requestMock.hostname()).thenReturn(InetAddress.getByName("192.168.56.102"));
 
-        Node[] foundNodes = locator.locate(requestMock, nodes, mock(ClusterConfig.class));
-        assertEquals(node2Mock.hostname(), foundNodes[0].hostname());
+        locator.locateAndDispatch(requestMock, nodes, mock(ClusterConfig.class), null, null);
+        verify(node1Mock, never()).send(requestMock);
+        verify(node2Mock, times(1)).send(requestMock);
     }
 
 }
