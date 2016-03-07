@@ -125,6 +125,9 @@ public class BucketStreamAggregator {
     	
     	final DCPStreamsCounter counters = new DCPStreamsCounter(aggregatorState.size());
 
+    	// Force creation of all DCPConnection instances
+        open().toBlocking().last();
+
     	Observable<DCPRequest> s = DCPConnection.instances().get(0).subject();
     	for (int i=1; i<DCPConnection.instances().size(); i++) {
     		s = s.mergeWith(DCPConnection.instances().get(i).subject());
@@ -147,14 +150,7 @@ public class BucketStreamAggregator {
 			}
     	});
 
-        open()
-    		.flatMap(new Func1<DCPConnection, Observable<BucketStreamState>>() {
-				@Override
-				public Observable<BucketStreamState> call(DCPConnection unusedConnection) {
-					return Observable.from(aggregatorState);
-				}
-    		})
-    		
+		Observable.from(aggregatorState)
             .flatMap(new Func1<BucketStreamState, Observable<StreamRequestResponse>>() {
                 @Override
                 public Observable<StreamRequestResponse> call(final BucketStreamState feed) {
